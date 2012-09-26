@@ -19,8 +19,10 @@
 
 package fr.ina.research.fedora.perf;
 
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.util.HashSet;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -33,6 +35,7 @@ import com.yourmediashelf.fedora.client.response.FindObjectsResponse;
 
 import fr.ina.research.fedora.perf.utils.FOXMLGenerator;
 import fr.ina.research.fedora.perf.utils.FedoraTask;
+import fr.ina.research.fedora.perf.utils.FedoraTask.Type;
 
 /**
  * LaunchPerfTest
@@ -40,19 +43,17 @@ import fr.ina.research.fedora.perf.utils.FedoraTask;
  * @author Nicolas HERVE - nherve@ina.fr
  */
 public class LaunchPerfTest {
-	public final static boolean USE_SINGLE_CONNECTION = false;
-
 	public final static String FEDORA_LOGIN = "fedoraAdmin";
 	public final static String FEDORA_PASSWORD = "fedoraAdmin";
-	public final static String FEDORA_URL = "your server here";
-
+	public final static String FEDORA_URL = "http://localhost/fedora";
 	public final static String NAMESPACE = "fake";
-
 	private final static int NB_DOCUMENTS = 10000;
-	private final static int NB_THREADS = 5;
+	private final static int NB_THREADS = 20;
+	public final static String SOURCE = "EXT_ID_";
+	public final static boolean USE_SINGLE_CONNECTION = true;
 
 	public static FedoraClient connectFedora() throws MalformedURLException {
-		System.out.println("New Fedora connection established");
+		System.out.println("New FedoraClient");
 		return new FedoraClient(new FedoraCredentials(FEDORA_URL, FEDORA_LOGIN, FEDORA_PASSWORD));
 	}
 
@@ -60,14 +61,12 @@ public class LaunchPerfTest {
 		LaunchPerfTest test = new LaunchPerfTest();
 
 		try {
-			String v = test.connect();
-			System.out.println("Connected to " + FEDORA_URL + " running Fedora Commons version " + v);
+			test.connect();
 
 			test.purgeAllFakeDocuments();
-			System.out.println("Purge finished");
-
 			test.ingestFakeDocuments(NB_DOCUMENTS);
-			System.out.println("Ingestion of " + NB_DOCUMENTS + " documents finished");
+			//test.ingestRandomDocuments(NB_DOCUMENTS, true);
+			//test.queryFakeDocuments(NB_DOCUMENTS * 5, false);
 
 		} catch (MalformedURLException e) {
 			e.printStackTrace();
@@ -78,8 +77,54 @@ public class LaunchPerfTest {
 		}
 	}
 
+	public static Set<String> queryPids(FedoraClient client, String query, int maxResults) throws FedoraClientException {
+		boolean found;
+		boolean again;
+		Set<String> result = new HashSet<String>();
+		String sessionToken = null;
+		int mtq = 100;
+		if ((maxResults > 0) && (maxResults < mtq)) {
+			mtq = maxResults;
+		}
+		do {
+			FindObjects findObjectsQuery = new FindObjects().query(query).maxResults(mtq).pid();
+			if (sessionToken != null) {
+				System.out.println("sessionToken : " + sessionToken);
+				findObjectsQuery = findObjectsQuery.sessionToken(sessionToken);
+			}
+
+			FindObjectsResponse findObjectsResponse = null;
+			try {
+				findObjectsResponse = findObjectsQuery.execute(client);
+				sessionToken = findObjectsResponse.getToken();
+
+				if (sessionToken == null) {
+					again = false;
+				} else {
+					again = true;
+				}
+
+				found = false;
+				for (String pid : findObjectsResponse.getPids()) {
+					result.add(pid);
+					found = true;
+				}
+			} finally {
+				if (findObjectsResponse != null) {
+					try {
+						findObjectsResponse.getEntityInputStream().close();
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+		} while (found && again && ((maxResults <= 0) || (result.size() < maxResults)));
+		return result;
+	}
+
 	private FedoraClient client;
 	private FOXMLGenerator generator;
+
 	private ThreadPoolExecutor threadPool;
 
 	public LaunchPerfTest() {
@@ -96,15 +141,15 @@ public class LaunchPerfTest {
 		}
 	}
 
-	private String connect() throws MalformedURLException, FedoraClientException {
+	private void connect() throws MalformedURLException, FedoraClientException {
 		client = connectFedora();
-		return client.getServerVersion();
+		System.out.println("Connected to " + FEDORA_URL + " running Fedora Commons version " + client.getServerVersion());
 	}
 
 	private void ingestFakeDocuments(int nbDocuments) {
 		for (int i = 0; i < nbDocuments; i++) {
 			String foxml = generator.getNextFOXML();
-			FedoraTask task = new FedoraTask(foxml, null);
+			FedoraTask task = new FedoraTask(Type.INGEST, foxml);
 			if (USE_SINGLE_CONNECTION) {
 				task.setGlobalClient(client);
 			}
@@ -112,16 +157,35 @@ public class LaunchPerfTest {
 		}
 
 		waitTasks();
+		
+		System.out.println("Ingestion of " + nbDocuments + " documents finished");
+	}
 
+	private void ingestRandomDocuments(int nbDocuments, boolean allowDuplicate) {
+		int maxId = nbDocuments / 5;
+		Random rd = new Random();
+		for (int i = 0; i < nbDocuments; i++) {
+			String foxml = generator.getNextFOXML(rd.nextInt(maxId));
+			FedoraTask task = new FedoraTask(Type.INGEST, foxml);
+			task.setAllowDuplicate(allowDuplicate);
+			if (USE_SINGLE_CONNECTION) {
+				task.setGlobalClient(client);
+			}
+			threadPool.submit(task);
+		}
+
+		waitTasks();
+		
+		System.out.println("Ingestion of " + nbDocuments + " random documents finished");
 	}
 
 	private void purgeAllFakeDocuments() throws FedoraClientException {
-		Set<String> pids = queryPids("pid~" + NAMESPACE + ":*", -1);
+		Set<String> pids = queryPids(client, "pid~" + NAMESPACE + ":*", -1);
 
 		System.out.println("Found " + pids.size() + " objects to purge");
 
 		for (String pid : pids) {
-			FedoraTask task = new FedoraTask(null, pid);
+			FedoraTask task = new FedoraTask(Type.PURGE, pid);
 			if (USE_SINGLE_CONNECTION) {
 				task.setGlobalClient(client);
 			}
@@ -129,39 +193,36 @@ public class LaunchPerfTest {
 		}
 
 		waitTasks();
+
+		System.out.println("Purge finished");
 	}
 
-	private Set<String> queryPids(String query, int maxResults) throws FedoraClientException {
-		boolean found;
-		boolean again;
-		Set<String> result = new HashSet<String>();
-		String sessionToken = null;
-		int mtq = 100;
-		if ((maxResults > 0) && (maxResults < mtq)) {
-			mtq = maxResults;
-		}
-		do {
-			FindObjects findObjectsQuery = new FindObjects().query(query).maxResults(mtq).pid();
-			if (sessionToken != null) {
-				findObjectsQuery = findObjectsQuery.sessionToken(sessionToken);
+	private void queryFakeDocuments(int nb, boolean singleThread) throws FedoraClientException {
+		Random rd = new Random();
+		for (int i = 0; i < nb; i++) {
+			String source = SOURCE + rd.nextInt(NB_DOCUMENTS * 2);
+			FedoraTask task = new FedoraTask(Type.QUERY, source);
+			if (USE_SINGLE_CONNECTION) {
+				task.setGlobalClient(client);
 			}
-
-			FindObjectsResponse findObjectsResponse = findObjectsQuery.execute(client);
-			sessionToken = findObjectsResponse.getToken();
-
-			if (sessionToken == null) {
-				again = false;
+			if (singleThread) {
+				task.run();
+				try {
+					Thread.sleep(100);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
 			} else {
-				again = true;
+				threadPool.submit(task);
 			}
+			
+		}
 
-			found = false;
-			for (String pid : findObjectsResponse.getPids()) {
-				result.add(pid);
-				found = true;
-			}
-		} while (found && again && ((maxResults <= 0) || (result.size() < maxResults)));
-		return result;
+		if (!singleThread) {
+			waitTasks();
+		}
+		
+		System.out.println("Querying of " + nb + " documents finished");
 	}
 
 	private void waitTasks() {

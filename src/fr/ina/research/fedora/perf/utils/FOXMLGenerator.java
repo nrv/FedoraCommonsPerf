@@ -30,35 +30,46 @@ import fr.ina.research.fedora.perf.LaunchPerfTest;
  * @author Nicolas HERVE - nherve@ina.fr
  */
 public class FOXMLGenerator {
-	private int internalId;
+	private static String getPid(int id) {
+		return LaunchPerfTest.NAMESPACE + ":" + id;
+	}
+	
 	private DecimalFormat formater;
+	private int internalId;
 
 	public FOXMLGenerator() {
 		super();
 		internalId = 0;
 		formater = new DecimalFormat("00000000");
 	}
+	
+	public String getFOXML(int pid, int sid) {
+		File fakeImageFile = new File("/this/is/a/fake/image_" + formater.format(pid) + ".jpg");
+		String label = "Image " + pid + " / " + sid;
+		String source = LaunchPerfTest.SOURCE + sid;
+		String description = "Fake image file '" + fakeImageFile.getName() + "' to test Fedora Commons multithread performances";
 
+		return produceFOXML(fakeImageFile, pid, label, source, description);
+	}
+	
 	public String getNextFOXML() {
 		internalId++;
 
-		File fakeImageFile = new File("/this/is/a/fake/image_" + formater.format(internalId) + ".jpg");
-		String label = "Image " + internalId;
-		String description = "Fake image file '" + fakeImageFile.getName() + "' to test Fedora Commons multithread performances";
-
-		return produceFOXML(fakeImageFile, internalId, label, description);
+		return getFOXML(internalId, internalId);
 	}
 
-	private static String getPid(int id) {
-		return LaunchPerfTest.NAMESPACE + ":" + id;
+	public String getNextFOXML(int sid) {
+		internalId++;
+
+		return getFOXML(internalId, sid);
 	}
 
-	private String produceFOXML(File f, int id, String label, String description) {
+	private String produceFOXML(File f, int id, String label, String source, String description) {
 		String pid = getPid(id);
 
 		StringBuilder sb = new StringBuilder();
 		sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-		sb.append("<foxml:digitalObject xmlns:foxml=\"info:fedora/fedora-system:def/foxml#\" VERSION=\"1.1\" PID=\"" + pid + "\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"info:fedora/fedora-system:def/foxml#http://www.fedora.info/definitions/1/0/foxml1-1.xsd\">\n");
+		sb.append("<foxml:digitalObject xmlns:foxml=\"info:fedora/fedora-system:def/foxml#\" VERSION=\"1.1\" PID=\"" + pid + "\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"info:fedora/fedora-system:def/foxml# http://www.fedora.info/definitions/1/0/foxml1-1.xsd\">\n");
 		sb.append("\t<foxml:objectProperties>\n");
 		sb.append("\t\t<foxml:property NAME=\"info:fedora/fedora-system:def/model#state\" VALUE=\"A\" />\n");
 		sb.append("\t\t<foxml:property NAME=\"info:fedora/fedora-system:def/model#label\" VALUE=\"" + label + "\" />\n");
@@ -73,6 +84,7 @@ public class FOXMLGenerator {
 		sb.append("\t\t\t\t\t<dc:description>" + description + "</dc:description>\n");
 		sb.append("\t\t\t\t\t<dc:publisher>INA - DRE</dc:publisher>\n");
 		sb.append("\t\t\t\t\t<dc:identifier>" + pid + "</dc:identifier>\n");
+		sb.append("\t\t\t\t\t<dc:source>" + source + "</dc:source>\n");
 		sb.append("\t\t\t\t</oai_dc:dc>\n");
 		sb.append("\t\t\t</foxml:xmlContent>\n");
 		sb.append("\t\t</foxml:datastreamVersion>\n");

@@ -21,6 +21,7 @@ package fr.ina.research.fedora.perf.utils;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.util.Set;
 
 import com.yourmediashelf.fedora.client.FedoraClient;
 import com.yourmediashelf.fedora.client.FedoraClientException;
@@ -37,7 +38,10 @@ import fr.ina.research.fedora.perf.LaunchPerfTest;
  * @author Nicolas HERVE - nherve@ina.fr
  */
 public class FedoraTask implements Runnable {
-	private FedoraClient globalClient;
+	public enum Type {
+		INGEST, PURGE, QUERY
+	}
+
 	private static ThreadLocal<FedoraClient> localClient = new ThreadLocal<FedoraClient>() {
 
 		@Override
@@ -50,14 +54,70 @@ public class FedoraTask implements Runnable {
 			}
 		}
 	};
-	
-	private String foxmlToIngest;
-	private String pidToPurge;
 
-	public FedoraTask(String foxmlToIngest, String pidToPurge) {
+	private boolean allowDuplicate;;
+	private FedoraClient globalClient;
+	private String parameter;
+	private Type type;
+
+	public FedoraTask(Type type, String parameter) {
 		super();
-		this.foxmlToIngest = foxmlToIngest;
-		this.pidToPurge = pidToPurge;
+		this.type = type;
+		this.parameter = parameter;
+		setAllowDuplicate(true);
+	}
+
+	private void ingest(FedoraClient client) {
+		IngestResponse ingestResponse = null;
+		try {
+			ingestResponse = new Ingest().content(parameter).execute(client);
+			if (ingestResponse.getStatus() != 201) {
+				System.err.println("Problem when ingesting foxml - status code " + ingestResponse.getStatus());
+			}
+		} catch (FedoraClientException e) {
+			e.printStackTrace();
+		} finally {
+			if (ingestResponse != null) {
+				try {
+					ingestResponse.getEntityInputStream().close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+
+	private void purge(FedoraClient client) {
+		FedoraResponse purgeResponse = null;
+		try {
+			purgeResponse = new PurgeObject(parameter).execute(client);
+			if (purgeResponse.getStatus() != 200) {
+				System.err.println("Problem when purging object '" + parameter + "' - status code " + purgeResponse.getStatus());
+			}
+		} catch (FedoraClientException e) {
+			e.printStackTrace();
+		} finally {
+			if (purgeResponse != null) {
+				try {
+					purgeResponse.getEntityInputStream().close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+
+	private String query(FedoraClient client) {
+		try {
+			Set<String> somePids = LaunchPerfTest.queryPids(client, "source~" + parameter, -1);
+			if ((somePids == null) || (somePids.size() == 0)) {
+				return null;
+			}
+			return somePids.iterator().next();
+		} catch (FedoraClientException e) {
+			e.printStackTrace();
+			return null;
+		}
 	}
 
 	public void run() {
@@ -67,43 +127,17 @@ public class FedoraTask implements Runnable {
 			client = localClient.get();
 		}
 
-		if (foxmlToIngest != null) {
-			IngestResponse ingestResponse = null;
-			try {
-				ingestResponse = new Ingest().content(foxmlToIngest).execute(client);
-				if (ingestResponse.getStatus() != 201) {
-					System.err.println("Problem when ingesting foxml - status code " + ingestResponse.getStatus());
-				}
-			} catch (FedoraClientException e) {
-				e.printStackTrace();
-			} finally {
-				if (ingestResponse != null) {
-					try {
-						ingestResponse.getEntityInputStream().close();
-					} catch (IOException e) {
-						e.printStackTrace();
-					}
-				}
-			}
-		} else if (pidToPurge != null) {
-			FedoraResponse purgeResponse = null;
-			try {
-				purgeResponse = new PurgeObject(pidToPurge).execute(client);
-				if (purgeResponse.getStatus() != 200) {
-					System.err.println("Problem when purging object '" + pidToPurge + "' - status code " + purgeResponse.getStatus());
-				}
-			} catch (FedoraClientException e) {
-				e.printStackTrace();
-			} finally {
-				if (purgeResponse != null) {
-					try {
-						purgeResponse.getEntityInputStream().close();
-					} catch (IOException e) {
-						e.printStackTrace();
-					}
-				}
-			}
+		if (type == Type.INGEST) {
+			ingest(client);
+		} else if (type == Type.PURGE) {
+			purge(client);
+		} else if (type == Type.QUERY) {
+			query(client);
 		}
+	}
+
+	public void setAllowDuplicate(boolean allowDuplicate) {
+		this.allowDuplicate = allowDuplicate;
 	}
 
 	public void setGlobalClient(FedoraClient client) {
